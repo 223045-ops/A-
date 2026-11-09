@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ブロックブラスト風ゲーム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        body {
+            /* スワイプによるリロードなどを防止 */
+            touch-action: none;
+            overflow: hidden;
+            color: white;
+            font-family: 'Inter', sans-serif;
+        }
+        .bg-animated {
+            background: linear-gradient(-45deg, #0f172a, #1e1b4b, #0f172a, #312e81);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+        }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* アニメーション用クラス */
+        .pop-in {
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes popIn {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center h-screen w-screen bg-animated">
+
+    <!-- ヘッダーUI -->
+    <div class="w-full max-w-md px-6 py-4 flex justify-between items-center z-10 select-none glass-panel m-4 rounded-2xl shadow-2xl">
+        <div>
+            <h1 class="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 drop-shadow-sm">BLOCK BLAST</h1>
+            <p id="comboText" class="text-sm font-bold text-yellow-400 h-5 transition-all duration-300 opacity-0 transform translate-y-2">Combo x2!</p>
+        </div>
+        <div class="flex gap-4">
+            <div class="text-right">
+                <p class="text-xs text-slate-400">SCORE</p>
+                <p class="text-2xl font-bold font-mono" id="score">0</p>
+            </div>
+            <div class="text-right">
+                <p class="text-xs text-slate-400">BEST</p>
+                <p class="text-2xl font-bold font-mono" id="bestScore">0</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ゲームエリア -->
+    <div class="relative w-full max-w-md flex-1 flex flex-col items-center justify-start pb-6">
+        <canvas id="gameCanvas"></canvas>
+        
+        <!-- ゲームオーバー画面 -->
+        <div id="gameOverScreen" class="hidden absolute inset-0 bg-slate-900/90 flex flex-col items-center justify-center z-20 pop-in backdrop-blur-sm rounded-xl">
+            <h2 class="text-4xl font-black text-white mb-2 tracking-wider">GAME OVER</h2>
+            <p class="text-slate-300 mb-8">Score: <span id="finalScore" class="font-bold text-yellow-400 text-xl">0</span></p>
+            <button id="restartBtn" class="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-full font-bold text-lg shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-transform active:scale-95 text-white">
+                もう一度プレイ
+            </button>
+        </div>
+    </div>
+
+<script>
+/**
+ * Block Blast Clone Logic
+ */
+
+// --- 形状の定義 ---
+const SHAPE_DEFS = [
+    // 1x1
+    { p: [[1]], c: '#f43f5e' }, // rose-500
+    // 2x1, 1x2
+    { p: [[1,1]], c: '#f97316' }, // orange-500
+    { p: [[1],[1]], c: '#f97316' },
+    // 3x1, 1x3
+    { p: [[1,1,1]], c: '#eab308' }, // yellow-500
+    { p: [[1],[1],[1]], c: '#eab308' },
+    // 4x1, 1x4
+    { p: [[1,1,1,1]], c: '#22c55e' }, // green-500
+    { p: [[1],[1],[1],[1]], c: '#22c55e' },
+    // 5x1, 1x5
+    { p: [[1,1,1,1,1]], c: '#14b8a6' }, // teal-500
+    { p: [[1],[1],[1],[1],[1]], c: '#14b8a6' },
+    // 2x2
+    { p: [[1,1],[1,1]], c: '#0ea5e9' }, // sky-500
+    // 3x3
+    { p: [[1,1,1],[1,1,1],[1,1,1]], c: '#8b5cf6' }, // violet-500
+    // L shapes (2x2)
+    { p: [[1,1],[1,0]], c: '#d946ef' }, // fuchsia-500
+    { p: [[1,1],[0,1]], c: '#d946ef' },
+    { p: [[1,0],[1,1]], c: '#d946ef' },
+    { p: [[0,1],[1,1]], c: '#d946ef' },
+    // L shapes (3x3)
+    { p: [[1,0,0],[1,0,0],[1,1,1]], c: '#3b82f6' }, // blue-500
+    { p: [[0,0,1],[0,0,1],[1,1,1]], c: '#3b82f6' },
+    { p: [[1,1,1],[1,0,0],[1,0,0]], c: '#3b82f6' },
+    { p: [[1,1,1],[0,0,1],[0,0,1]], c: '#3b82f6' }
+];
+
+// --- グローバル変数 ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+const scoreEl = document.getElementById('score');
+const bestScoreEl = document.getElementById('bestScore');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const finalScoreEl = document.getElementById('finalScore');
+const restartBtn = document.getElementById('restartBtn');
+
+const GRID_SIZE = 8;
+let CELL_SIZE = 0;
+let GRID_X = 0;
+let GRID_Y = 0;
+let DOCK_Y = 0;
+
+let board = [];
+let dock = [null, null, null];
+let score = 0;
+let bestScore = localStorage.getItem('blockBlastBest') || 0;
+bestScoreEl.innerText = bestScore;
+let isGameOver = false;
+
+// ドラッグ関連
+let draggedItem = null; // { index, shape, offsetX, offsetY, startX, startY }
+let pointer = { x: 0, y: 0, isDown: false };
+let isTouch = false;
+
+// アニメーション・エフェクト関連
+let clearingCells = []; // {r, c, time}
+let placedCells = []; // 配置直後のフラッシュエフェクト用 {r, c, time}
+let particles = [];
+let floatingTexts = [];
+let comboCount = 0;
+let shakeAmount = 0; // 画面の揺れ具合
+
+// --- 音声エフェクト (Tone.js) ---
+let synth = null;
+let isAudioInitialized = false;
+
+function initAudio() {
+    if (!isAudioInitialized) {
+        synth = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: "triangle" },
+            envelope: { attack: 0.01, decay: 0.1, sustain: 0.1, release: 0.5 }
+        }).toDestination();
+        synth.volume.value = -10; // 音量調整
+        Tone.start();
+        isAudioInitialized = true;
+    }
+}
+
+function playSound(type) {
+    if (!synth) return;
+    if (type === 'place') {
+        synth.triggerAttackRelease("E4", "32n"); // 少し高くて明るい音に
+    } else if (type === 'clear') {
+        synth.triggerAttackRelease(["C5", "E5", "G5", "C6"], "8n");
+    } else if (type === 'gameover') {
+        synth.triggerAttackRelease(["C4", "G3", "C3"], "2n");
+    }
+}
+
+// --- 初期化とリサイズ ---
+function initBoard() {
+    board = [];
+    for (let r = 0; r < GRID_SIZE; r++) {
+        board.push(new Array(GRID_SIZE).fill(null));
+    }
+}
+
+function resize() {
+    const parent = canvas.parentElement;
+    canvas.width = parent.clientWidth;
+    canvas.height = parent.clientHeight;
+    
+    // グリッドサイズの計算 (画面幅の90%程度、ただし最大値あり)
+    const maxGridWidth = Math.min(canvas.width * 0.9, 400);
+    CELL_SIZE = Math.floor(maxGridWidth / GRID_SIZE);
+    const gridWidth = CELL_SIZE * GRID_SIZE;
+    
+    GRID_X = (canvas.width - gridWidth) / 2;
+    GRID_Y = 20; // ヘッダー下の余白
+    
+    DOCK_Y = GRID_Y + gridWidth + 40; // グリッドの下にドックを配置
+    
+    draw();
+}
+
+window.addEventListener('resize', resize);
+
+// --- ゲームロジック ---
+function generateDockShapes() {
+    for (let i = 0; i < 3; i++) {
+        const def = SHAPE_DEFS[Math.floor(Math.random() * SHAPE_DEFS.length)];
+        dock[i] = {
+            pattern: def.p,
+            color: def.c,
+            // 描画用のスケールと位置は draw 内で計算
+        };
+    }
+    checkGameOver();
+}
+
+function canPlace(shape, gridCol, gridRow) {
+    for (let r = 0; r < shape.length; r++) {
+        for (let c = 0; c < shape[r].length; c++) {
+            if (shape[r][c] === 1) {
+                const tr = gridRow + r;
+                const tc = gridCol + c;
+                if (tr < 0 || tr >= GRID_SIZE || tc < 0 || tc >= GRID_SIZE) return false; // 枠外
+                if (board[tr][tc] !== null) return false; // すでにブロックがある
+            }
+        }
+    }
+    return true;
+}
+
+function placeShape(shape, gridCol, gridRow, color) {
+    let blocksPlaced = 0;
+    for (let r = 0; r < shape.length; r++) {
+        for (let c = 0; c < shape[r].length; c++) {
+            if (shape[r][c] === 1) {
+                board[gridRow + r][gridCol + c] = color;
+                blocksPlaced++;
+                // 配置時のフラッシュエフェクト用
+                placedCells.push({ r: gridRow + r, c: gridCol + c, time: 10 });
+                // 設置時のパーティクル（少し増量）
+                createParticles(GRID_X + (gridCol + c + 0.5) * CELL_SIZE, GRID_Y + (gridRow + r + 0.5) * CELL_SIZE, color, 8);
+            }
+        }
+    }
+    shakeAmount = 3; // 配置時に軽く揺らす
+    playSound('place');
+    addScore(blocksPlaced);
+    checkLines();
+}
+
+function checkLines() {
+    let rowsToClear = [];
+    let colsToClear = [];
+
+    // 行のチェック
+    for (let r = 0; r < GRID_SIZE; r++) {
+        if (board[r].every(cell => cell !== null)) {
+            rowsToClear.push(r);
+        }
+    }
+
+    // 列のチェック
+    for (let c = 0; c < GRID_SIZE; c++) {
+        let isFull = true;
+        for (let r = 0; r < GRID_SIZE; r++) {
+            if (board[r][c] === null) {
+                isFull = false;
+                break;
+            }
+        }
+        if (isFull) colsToClear.push(c);
+    }
+
+    const linesCleared = rowsToClear.length + colsToClear.length;
+    if (linesCleared > 0) {
+        // 消去アニメーション用に記録
+        rowsToClear.forEach(r => {
+            for (let c = 0; c < GRID_SIZE; c++) {
+                clearingCells.push({ r, c, color: board[r][c], time: 20 });
+                createParticles(GRID_X + (c + 0.5) * CELL_SIZE, GRID_Y + (r + 0.5) * CELL_SIZE, board[r][c], 8);
+                board[r][c] = null; // 実際のデータからは即削除
+            }
+        });
+        colsToClear.forEach(c => {
+            for (let r = 0; r < GRID_SIZE; r++) {
+                // すでに行で消されているかチェック
+                if (board[r][c] !== null) {
+                    clearingCells.push({ r, c, color: board[r][c], time: 20 });
+                    createParticles(GRID_X + (c + 0.5) * CELL_SIZE, GRID_Y + (r + 0.5) * CELL_SIZE, board[r][c], 8);
+                    board[r][c] = null;
+                }
+            }
+        });
+
+        playSound('clear');
+        shakeAmount = 8; // ライン消去時は強めに揺らす
+        comboCount++;
+
+        // コンボUI表示
+        const comboEl = document.getElementById('comboText');
+        if (comboCount > 1) {
+            comboEl.innerText = `${comboCount} COMBO!`;
+            comboEl.classList.remove('opacity-0', 'translate-y-2');
+            comboEl.classList.add('opacity-100', 'translate-y-0', 'scale-110');
+            setTimeout(() => comboEl.classList.remove('scale-110'), 150);
+        }
+
+        // スコア計算 (ライン消しのボーナス)
+        const comboBonus = comboCount > 1 ? comboCount * 10 : 0;
+        const points = linesCleared * 10 + comboBonus;
+        addScore(points);
+
+        // フローティングテキスト
+        const centerR = rowsToClear.length > 0 ? rowsToClear[0] : (colsToClear.length > 0 ? GRID_SIZE/2 : 0);
+        const centerC = colsToClear.length > 0 ? colsToClear[0] : (rowsToClear.length > 0 ? GRID_SIZE/2 : 0);
+        floatingTexts.push({
+            x: GRID_X + centerC * CELL_SIZE,
+            y: GRID_Y + centerR * CELL_SIZE,
+            text: `+${points}`,
+            life: 40
+        });
+    } else {
+        comboCount = 0;
+        const comboEl = document.getElementById('comboText');
+        comboEl.classList.add('opacity-0', 'translate-y-2');
+        comboEl.classList.remove('opacity-100', 'translate-y-0');
+    }
+}
+
+function addScore(points) {
+    score += points;
+    scoreEl.innerText = score;
+    if (score > bestScore) {
+        bestScore = score;
+        bestScoreEl.innerText = bestScore;
+        localStorage.setItem('blockBlastBest', bestScore);
+    }
+}
+
+function checkGameOver() {
+    let canAnyPlace = false;
+    for (let i = 0; i < 3; i++) {
+        const item = dock[i];
+        if (item) {
+            // この形状が盤面のどこかに置けるかチェック
+            for (let r = 0; r < GRID_SIZE; r++) {
+                for (let c = 0; c < GRID_SIZE; c++) {
+                    if (canPlace(item.pattern, c, r)) {
+                        canAnyPlace = true;
+                        break;
+                    }
+                }
+                if (canAnyPlace) break;
+            }
+        }
+    }
+    
+    if (!canAnyPlace && dock.some(d => d !== null)) {
+        isGameOver = true;
+        playSound('gameover');
+        finalScoreEl.innerText = score;
+        gameOverScreen.classList.remove('hidden');
+        gameOverScreen.classList.add('flex');
+    }
+}
+
+// --- パーティクル生成 ---
+function createParticles(x, y, color, count) {
+    if (!color) return;
+    for (let i = 0; i < count; i++) {
+        particles.push({
+            x: x,
+            y: y,
+            vx: (Math.random() - 0.5) * 12,
+            vy: (Math.random() - 0.5) * 12,
+            life: 30 + Math.random() * 20,
+            maxLife: 50,
+            color: color,
+            size: 2 + Math.random() * 5
+        });
+    }
+}
+
+// --- 描画関数 ---
+function drawRoundRect(ctx, x, y, w, h, r, color, glow = false) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    
+    ctx.fillStyle = color;
+    if (glow) {
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = color;
+    }
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // 内側のハイライト(立体感)
+    ctx.strokeStyle = "rgba(255,255,255,0.3)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.15)";
+    ctx.fillRect(x, y + h - r, w, r); // 下部に影
+}
+
+function drawBlockPattern(ctx, pattern, x, y, cellSize, color, glow = false) {
+    for (let r = 0; r < pattern.length; r++) {
+        for (let c = 0; c < pattern[r].length; c++) {
+            if (pattern[r][c] === 1) {
+                drawRoundRect(ctx, x + c * cellSize, y + r * cellSize, cellSize - 2, cellSize - 2, 4, color, glow);
+            }
+        }
+    }
+}
+
+function draw() {
+    // 背景クリア
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 画面揺れ (スクリーンシェイク)
+    ctx.save();
+    if (shakeAmount > 0.5) {
+        const dx = (Math.random() - 0.5) * shakeAmount;
+        const dy = (Math.random() - 0.5) * shakeAmount;
+        ctx.translate(dx, dy);
+        shakeAmount *= 0.8; // 揺れを減衰させる
+    }
+
+    // グリッド背景の描画
+    ctx.fillStyle = 'rgba(30, 41, 59, 0.6)'; // slate-800透過
+    ctx.fillRect(GRID_X, GRID_Y, CELL_SIZE * GRID_SIZE, CELL_SIZE * GRID_SIZE);
+    
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'; // 薄いグリッド線
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= GRID_SIZE; i++) {
+        // 縦線
+        ctx.moveTo(GRID_X + i * CELL_SIZE, GRID_Y);
+        ctx.lineTo(GRID_X + i * CELL_SIZE, GRID_Y + CELL_SIZE * GRID_SIZE);
+        // 横線
+        ctx.moveTo(GRID_X, GRID_Y + i * CELL_SIZE);
+        ctx.lineTo(GRID_X + CELL_SIZE * GRID_SIZE, GRID_Y + i * CELL_SIZE);
+    }
+    ctx.stroke();
+
+    // 盤面のブロック描画
+    for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+            if (board[r][c] !== null) {
+                drawRoundRect(ctx, GRID_X + c * CELL_SIZE + 1, GRID_Y + r * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2, 6, board[r][c]);
+            }
+        }
+    }
+
+    // 配置直後のフラッシュエフェクト
+    for (let i = placedCells.length - 1; i >= 0; i--) {
+        const cell = placedCells[i];
+        const alpha = cell.time / 10;
+        ctx.globalAlpha = alpha * 0.8;
+        drawRoundRect(ctx, GRID_X + cell.c * CELL_SIZE + 1, GRID_Y + cell.r * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2, 6, '#ffffff', true);
+        ctx.globalAlpha = 1.0;
+        
+        cell.time--;
+        if (cell.time <= 0) placedCells.splice(i, 1);
+    }
+
+    // 消去アニメーション
+    for (let i = clearingCells.length - 1; i >= 0; i--) {
+        const cell = clearingCells[i];
+        const scale = cell.time / 20; // 1 to 0
+        const size = (CELL_SIZE - 2) * scale;
+        const offset = ((CELL_SIZE - 2) - size) / 2;
+        
+        ctx.globalAlpha = scale;
+        drawRoundRect(
+            ctx, 
+            GRID_X + cell.c * CELL_SIZE + 1 + offset, 
+            GRID_Y + cell.r * CELL_SIZE + 1 + offset, 
+            size, size, 6, '#ffffff', true
+        );
+        ctx.globalAlpha = 1.0;
+        
+        cell.time--;
+        if (cell.time <= 0) {
+            clearingCells.splice(i, 1);
+        }
+    }
+
+    // パーティクルの描画と更新
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        
+        ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+        
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // フローティングテキストの描画
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        const ft = floatingTexts[i];
+        ft.y -= 1;
+        ft.life--;
+        
+        ctx.globalAlpha = Math.max(0, ft.life / 40);
+        ctx.fillStyle = '#fbbf24'; // amber-400
+        ctx.font = '900 28px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        // 黒枠をつけて見やすく
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.strokeText(ft.text, ft.x, ft.y);
+        ctx.fillText(ft.text, ft.x, ft.y);
+        ctx.globalAlpha = 1.0;
+        
+        if (ft.life <= 0) floatingTexts.splice(i, 1);
+    }
+
+    // ホバー時のスナッププレビュー（ドラッグ中）
+    let previewValid = false;
+    if (draggedItem && pointer.isDown) {
+        // ドラッグ位置から盤面の左上セルを計算
+        // タッチ操作を見越して、指の少し上にブロックを表示させるオフセットを適用
+        const touchOffset = isTouch ? -60 : 0; 
+        
+        const shapeW = draggedItem.shape.pattern[0].length * CELL_SIZE;
+        const shapeH = draggedItem.shape.pattern.length * CELL_SIZE;
+        
+        const drawX = pointer.x - draggedItem.offsetX;
+        const drawY = pointer.y - draggedItem.offsetY + touchOffset;
+
+        // 最も近いグリッドのセルを計算（吸着しやすくするための調整）
+        const gridCol = Math.round((drawX - GRID_X) / CELL_SIZE);
+        const gridRow = Math.round((drawY - GRID_Y) / CELL_SIZE);
+
+        if (canPlace(draggedItem.shape.pattern, gridCol, gridRow)) {
+            previewValid = true;
+            ctx.globalAlpha = 0.4;
+            drawBlockPattern(ctx, draggedItem.shape.pattern, GRID_X + gridCol * CELL_SIZE, GRID_Y + gridRow * CELL_SIZE, CELL_SIZE, draggedItem.shape.color);
+            ctx.globalAlpha = 1.0;
+            // プレビュー位置を保存してドロップ時に使う
+            draggedItem.previewCol = gridCol;
+            draggedItem.previewRow = gridRow;
+        } else {
+            draggedItem.previewCol = null;
+            draggedItem.previewRow = null;
+        }
+    }
+
+    // ドック（待機中）のブロック描画
+    const dockSlotWidth = canvas.width / 3;
+    for (let i = 0; i < 3; i++) {
+        if (draggedItem && draggedItem.index === i) continue; // ドラッグ中はドックに描画しない
+        
+        const item = dock[i];
+        if (item) {
+            // ドック用スケール (少し小さめ)
+            const dockScale = 0.6;
+            const slotCellSize = CELL_SIZE * dockScale;
+            
+            const shapeW = item.pattern[0].length * slotCellSize;
+            const shapeH = item.pattern.length * slotCellSize;
+            
+            // スロットの中央に配置
+            const x = (i * dockSlotWidth) + (dockSlotWidth - shapeW) / 2;
+            const y = DOCK_Y + (150 - shapeH) / 2; // 150はドックエリアの高さ目安
+
+            // 配置不可能な場合は暗くする
+            let isPlaceable = false;
+            if(!isGameOver) {
+                for(let r=0; r<GRID_SIZE; r++){
+                    for(let c=0; c<GRID_SIZE; c++){
+                        if(canPlace(item.pattern, c, r)){
+                            isPlaceable = true; break;
+                        }
+                    }
+                    if(isPlaceable) break;
+                }
+            }
+
+            if(!isPlaceable && !isGameOver) {
+                ctx.globalAlpha = 0.3;
+                drawBlockPattern(ctx, item.pattern, x, y, slotCellSize, '#64748b'); // 灰色っぽく
+                ctx.globalAlpha = 1.0;
+            } else {
+                drawBlockPattern(ctx, item.pattern, x, y, slotCellSize, item.color);
+            }
+        }
+    }
+
+    // ドラッグ中のブロック描画 (等倍サイズ)
+    if (draggedItem && pointer.isDown) {
+        const touchOffset = isTouch ? -60 : 0; 
+        const drawX = pointer.x - draggedItem.offsetX;
+        const drawY = pointer.y - draggedItem.offsetY + touchOffset;
+        
+        // プレビューが有効な場合は光らせる
+        drawBlockPattern(ctx, draggedItem.shape.pattern, drawX, drawY, CELL_SIZE, draggedItem.shape.color, previewValid);
+    }
+
+    ctx.restore(); // スクリーンシェイクのリセット
+    requestAnimationFrame(draw);
+}
+
+// --- 入力ハンドリング ---
+function getPointerPos(e) {
+    if (e.touches) {
+        isTouch = true;
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: e.touches[0].clientX - rect.left,
+            y: e.touches[0].clientY - rect.top
+        };
+    } else {
+        isTouch = false;
+        return { x: e.offsetX, y: e.offsetY };
+    }
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+    initAudio(); // 最初のタップでAudioContextを初期化
+    if (isGameOver) return;
+    pointer = getPointerPos(e);
+    pointer.isDown = true;
+
+    // ドックのブロックがクリックされたか判定
+    const dockSlotWidth = canvas.width / 3;
+    for (let i = 0; i < 3; i++) {
+        const item = dock[i];
+        if (item) {
+            const dockScale = 0.6;
+            const slotCellSize = CELL_SIZE * dockScale;
+            const shapeW = item.pattern[0].length * slotCellSize;
+            const shapeH = item.pattern.length * slotCellSize;
+            const x = (i * dockSlotWidth) + (dockSlotWidth - shapeW) / 2;
+            const y = DOCK_Y + (150 - shapeH) / 2;
+
+            // 当たり判定 (少し緩めに)
+            const padding = 20;
+            if (pointer.x >= x - padding && pointer.x <= x + shapeW + padding &&
+                pointer.y >= y - padding && pointer.y <= y + shapeH + padding) {
+                
+                // ドラッグ開始
+                // ドラッグ時は原寸大(CELL_SIZE)になるため、オフセットもそれに合わせる
+                draggedItem = {
+                    index: i,
+                    shape: item,
+                    // タッチした位置のブロック内の相対割合を計算し、等倍サイズでのオフセットに変換
+                    offsetX: ((pointer.x - x) / shapeW) * (item.pattern[0].length * CELL_SIZE),
+                    offsetY: ((pointer.y - y) / shapeH) * (item.pattern.length * CELL_SIZE),
+                    startX: x,
+                    startY: y,
+                    previewCol: null,
+                    previewRow: null
+                };
+                // 振動フィードバック (対応デバイスのみ)
+                if(navigator.vibrate) navigator.vibrate(15);
+                break;
+            }
+        }
+    }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+    if (pointer.isDown) {
+        e.preventDefault(); // スクロール防止
+        pointer = { ...pointer, ...getPointerPos(e) };
+    }
+});
+
+canvas.addEventListener('pointerup', (e) => {
+    if (draggedItem && pointer.isDown) {
+        if (draggedItem.previewCol !== null && draggedItem.previewRow !== null) {
+            // 配置成功
+            placeShape(draggedItem.shape.pattern, draggedItem.previewCol, draggedItem.previewRow, draggedItem.shape.color);
+            dock[draggedItem.index] = null; // ドックから削除
+            if(navigator.vibrate) navigator.vibrate(20);
+            
+            // 全て消費したかチェック
+            if (dock.every(d => d === null)) {
+                generateDockShapes();
+            } else {
+                checkGameOver();
+            }
+        }
+    }
+    draggedItem = null;
+    pointer.isDown = false;
+});
+
+// キャンバス外に出た時も離したと判定
+canvas.addEventListener('pointerleave', () => {
+    draggedItem = null;
+    pointer.isDown = false;
+});
+
+// リスタートボタン
+restartBtn.addEventListener('click', () => {
+    initBoard();
+    score = 0;
+    scoreEl.innerText = score;
+    isGameOver = false;
+    gameOverScreen.classList.add('hidden');
+    gameOverScreen.classList.remove('flex');
+    generateDockShapes();
+});
+
+// --- 初期起動 ---
+initBoard();
+resize(); // draw() は内部で呼ばれる
+generateDockShapes();
+requestAnimationFrame(draw);
+
+</script>
+</body>
+</html>
