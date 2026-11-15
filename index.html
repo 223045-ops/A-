@@ -66,7 +66,7 @@
     </div>
 
     <!-- ゲームエリア -->
-    <div class="relative w-full max-w-md flex-1 flex flex-col items-center justify-start pb-6">
+    <div class="relative w-full max-w-md flex-1 min-h-0 flex flex-col items-center justify-start pb-6">
         <canvas id="gameCanvas"></canvas>
         
         <!-- ゲームオーバー画面 -->
@@ -187,9 +187,8 @@ function initBoard() {
 }
 
 function resize() {
-    const parent = canvas.parentElement;
-    canvas.width = parent.clientWidth;
-    canvas.height = parent.clientHeight;
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
     
     // グリッドサイズの計算 (画面幅の90%程度、ただし最大値あり)
     const maxGridWidth = Math.min(canvas.width * 0.9, 400);
@@ -201,7 +200,6 @@ function resize() {
     
     DOCK_Y = GRID_Y + gridWidth + 40; // グリッドの下にドックを配置
     
-    draw();
 }
 
 window.addEventListener('resize', resize);
@@ -727,7 +725,7 @@ restartBtn.addEventListener('click', () => {
 
 // --- 初期起動 ---
 initBoard();
-resize(); // draw() は内部で呼ばれる
+resize();
 generateDockShapes();
 requestAnimationFrame(draw);
 
